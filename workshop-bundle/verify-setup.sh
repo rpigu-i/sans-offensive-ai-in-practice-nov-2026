@@ -109,12 +109,12 @@ else
 fi
 echo ""
 
-# Check free disk. ZAP, ARTEX and scan output still need room after setup,
+# Check free disk. ZAP, ARTEX, Strix and scan output still need room after setup,
 # and a 4-core Codespace only has 32 GB.
 echo "Checking free disk space..."
 FREE_GB=$(df -Pk "$SCRIPT_DIR" | awk 'NR==2 {print int($4 / 1048576)}')
 if [ "$FREE_GB" -lt 8 ]; then
-    echo "⚠ Only ${FREE_GB} GB free — ZAP, ARTEX and scans may run out of space"
+    echo "⚠ Only ${FREE_GB} GB free — ZAP, ARTEX, Strix and scans may run out of space"
     echo "  Free build cache with: docker builder prune -af"
     WARNINGS=$((WARNINGS + 1))
 else

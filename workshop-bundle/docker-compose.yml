@@ -4,6 +4,10 @@ services:
     container_name: juice-shop
     ports:
       - "3000:3000"
+    networks:
+      - default
+      # Also on strix-net so the optional Strix sandbox can reach it (and only it).
+      - strix-net
     healthcheck:
       test: ["CMD", "/nodejs/bin/node", "-e", "require('http').get('http://localhost:3000', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 20s
@@ -192,6 +196,55 @@ services:
       juice-shop:
         condition: service_healthy
     restart: unless-stopped
+
+  # Strix (autonomous multi-agent AI pentester: CLI/TUI + local web dashboard).
+  # Optional 5th tool, gated behind the `strix` profile so `docker compose up -d`
+  # does not start it. It's a one-shot CLI, so launch scans with:
+  #   docker compose --profile strix run --rm strix -n -t http://juice-shop:3000 --scan-mode quick
+  # and browse results with:
+  #   docker compose --profile strix run --rm --service-ports strix view --host 0.0.0.0 --port 8789 --no-open
+  # Upstream: https://github.com/usestrix/strix  (Apache-2.0; pinned PyPI wheel)
+  strix:
+    profiles: ["strix"]
+    build:
+      context: ./dockerfiles
+      dockerfile: strix.Dockerfile
+    container_name: strix
+    stdin_open: true
+    tty: true
+    environment:
+      - STRIX_LLM=${STRIX_LLM:-anthropic/claude-sonnet-4-6}
+      - LLM_API_KEY=${ANTHROPIC_API_KEY:-}
+      - STRIX_REASONING_EFFORT=${STRIX_REASONING_EFFORT:-medium}
+      # Pinned sandbox image (the default for strix-agent 1.7.0).
+      - STRIX_IMAGE=ghcr.io/usestrix/strix-sandbox:1.3.0
+      # Strix starts its sandbox as a sibling container through the Docker
+      # socket. Put it on strix-net (Juice Shop + this controller only) instead
+      # of publishing ports, so it can reach http://juice-shop:3000 and the
+      # controller can reach it.
+      - STRIX_DOCKER_SANDBOX_NETWORK=strix-net
+      - STRIX_SANDBOX_MEM_LIMIT=${STRIX_SANDBOX_MEM_LIMIT:-4g}
+      - STRIX_TELEMETRY=${STRIX_TELEMETRY:-0}
+      - STRIX_NO_UPDATE_CHECK=1
+    ports:
+      # Only published with `run --service-ports` (the dashboard command above).
+      # Localhost-only: the tokened dashboard link can steer a live scan.
+      - "127.0.0.1:8789:8789"
+    volumes:
+      # Lets Strix create its sandbox container. This gives the container
+      # control of your Docker daemon, which is why Strix is opt-in.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./out/strix:/work/strix_runs   # run records, findings, final report
+    networks:
+      - strix-net
+    depends_on:
+      juice-shop:
+        condition: service_healthy
+
+networks:
+  # Fixed name: Strix attaches its sandbox to this network by name.
+  strix-net:
+    name: strix-net
 
 volumes:
   claude-config:

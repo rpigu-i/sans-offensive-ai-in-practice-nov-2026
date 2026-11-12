@@ -26,7 +26,7 @@
 
   // Clone the tools and build the images once, when the codespace is created.
   // Then drop the build cache (several GB) so the 32 GB disk has room for ZAP,
-  // ARTEX and scan output.
+  // ARTEX, Strix and scan output.
   "postCreateCommand": "cd workshop-bundle && ./setup.sh && docker compose --profile shannon build && docker builder prune -af",
   // Start the lab services every time the codespace starts.
   "postStartCommand": "cd workshop-bundle && docker compose up -d juice-shop shannon-postgres shannon-temporal shannon-temporal-ui pentestgpt",

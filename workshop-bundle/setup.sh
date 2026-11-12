@@ -136,6 +136,9 @@ mkdir -p "$SCRIPT_DIR/out/zap"
 mkdir -p "$SCRIPT_DIR/out/shannon"
 # ARTEX (optional 4th tool) writes findings/sessions here (bind-mounted to /app/data).
 mkdir -p "$SCRIPT_DIR/out/artex"
+# Strix (optional 5th tool) writes its runs here (bind-mounted to /work/strix_runs).
+# Nothing to clone: docker compose installs the pinned strix-agent wheel.
+mkdir -p "$SCRIPT_DIR/out/strix"
 
 # Clone Juice Shop source code
 if [ ! -d "$WORKSPACE_DIR/juice-shop" ]; then

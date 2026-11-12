@@ -20,6 +20,7 @@ In this lab you run three open-source, AI-assisted pentest tools — **ZAP**, **
 - [Run Shannon](#run-shannon)
 - [Run PentestGPT](#run-pentestgpt)
 - [Run ARTEX (optional 4th tool)](#run-artex-optional-4th-tool)
+- [Run Strix (optional 5th tool)](#run-strix-optional-5th-tool)
 - [Where reports are saved](#where-reports-are-saved)
 - [Resetting between runs](#resetting-between-runs)
 - [Troubleshooting](#troubleshooting)
@@ -43,7 +44,7 @@ Shannon and PentestGPT both call the Anthropic API on **your** key. ZAP does not
 
 - **Docker + Docker Compose** — Docker Desktop: https://www.docker.com/products/docker-desktop/
 - **An Anthropic API key** — https://platform.claude.com/ (see [cost & API credit](#before-you-start-cost--api-credit))
-- **Resources:** at least **8 GB of memory** available to Docker and about **20 GB of free disk** (≈30 GB if you also build the optional ARTEX image).
+- **Resources:** at least **8 GB of memory** available to Docker and about **20 GB of free disk** (≈30 GB if you also build the optional ARTEX image; add ≈7 GB for the optional Strix images).
 - **Free ports:** `3000`, `7233`, and `8233`.
 - **Outbound network** to `api.anthropic.com`, Docker Hub, GitHub, npm, PyPI, and the Ubuntu package mirrors. A TLS-inspecting proxy breaks the image builds and the API calls.
 
@@ -218,7 +219,8 @@ sans-offensive-ai-in-practice-nov-2026/
     └── out/                           <-- Tool output / reports
         ├── zap/                       <-- ZAP scan reports
         ├── shannon/                   <-- Shannon audit logs and session data
-        └── artex/                     <-- (optional) ARTEX findings, sessions, reports
+        ├── artex/                     <-- (optional) ARTEX findings, sessions, reports
+        └── strix/                     <-- (optional) Strix runs: findings + final report
 ```
 
 - The `tools/` directory holds **full git clones** of Shannon and PentestGPT — Compose needs each repo's `Dockerfile` to build the worker containers.
@@ -238,6 +240,8 @@ The three tools are independent and **safe to run at the same time** — they do
 3. **Come back to Shannon** when it finishes and review its report.
 
 Optionally, add [ARTEX](#run-artex-optional-4th-tool) as a supervised, GUI-driven segment. It's interactive (you approve each step), so run it as its own focused block rather than fire-and-forget — and not at the same time as a Shannon scan on a small machine.
+
+Optionally, add [Strix](#run-strix-optional-5th-tool) as a fire-and-forget black-box scan with a live web dashboard. A `quick` run is a good contrast to Shannon's white-box analysis. The same small-machine caveat applies.
 
 > Remember the AI tools all draw on the same API credit (ZAP is free). See [cost & API credit](#before-you-start-cost--api-credit).
 
@@ -448,6 +452,94 @@ ARTEX runs in a Codespace the same way the rest of the lab does, with a few cave
 
 ---
 
+## Run Strix (optional 5th tool)
+
+[Strix](https://github.com/usestrix/strix) is an **autonomous, multi-agent AI pentester**. A coordinating agent spawns specialist agents (recon, injection, auth, ...) that work inside a **sandbox container** loaded with real tooling: a Caido intercepting proxy, a headless browser, a terminal and a Python exploit runtime. It **validates findings with working PoCs** before reporting them. It differs from the other tools in two ways. Unlike ARTEX there's no approval gate, so it runs on its own like Shannon. Unlike Shannon it tests **black-box over HTTP** and doesn't read the source. You follow it in a terminal UI or a local web dashboard.
+
+It's **optional** and gated behind the `strix` Docker Compose profile, so `docker compose up -d` never starts it. Nothing is cloned: Compose builds a small image from the **pinned `strix-agent` PyPI wheel** (upstream ships Linux amd64/arm64 wheels with the TUI and dashboard prebuilt). It then pulls the pinned **sandbox image** `ghcr.io/usestrix/strix-sandbox` the first time you scan.
+
+> ⚠️ **Scope — read before using.** Strix is an autonomous pentester: only run it against systems you own or are explicitly authorized to test. In this workshop that means pointing Strix **only at the local Juice Shop container** (`http://juice-shop:3000`), never at any real or internet-facing target. Strix is licensed under **Apache-2.0**: https://github.com/usestrix/strix
+
+> 🔐 **How it's wired (and why it's opt-in).** The Strix CLI starts its sandbox as a sibling container, so the `strix` service mounts **`/var/run/docker.sock`**, which gives it control of your Docker daemon. The sandbox joins a dedicated **`strix-net`** network that only Juice Shop and the Strix controller are on, so the agents can reach the target but not Shannon's Postgres/Temporal or anything else in the lab. Its memory is capped at 4 GB (`STRIX_SANDBOX_MEM_LIMIT`).
+
+### Build Strix (once)
+
+From `workshop-bundle/`:
+
+```bash
+docker compose --profile strix build strix
+docker pull ghcr.io/usestrix/strix-sandbox:1.3.0   # ≈1.4 GB download, ≈5.8 GB on disk
+```
+
+Pulling the sandbox ahead of time is optional; the first scan pulls it anyway, but then the scan sits idle for a few minutes.
+
+### Run a scan
+
+```bash
+docker compose --profile strix run --rm strix \
+  -n -t http://juice-shop:3000 --scan-mode quick --max-budget-usd 10 \
+  --instruction "Workshop lab. Scope: http://juice-shop:3000 only."
+```
+
+- **`-n`** runs headless: findings stream to the terminal and the final report prints at the end. Leave out `-n` for the interactive terminal UI.
+- **`--scan-mode quick`** keeps it to minutes. `standard` takes 30–60 min and `deep` (upstream's default) takes 1–4 h, with matching API cost.
+- **`--max-budget-usd`** is a hard spending cap. The agents get wrap-up warnings as they approach it and the scan stops cleanly at the limit. **Always set it in the workshop.** Strix runs several agents in parallel, and a quick scan spends **~$2 on reconnaissance alone before it validates anything** — a cap that low stops with **0 findings**. A *completed* quick run against Juice Shop cost about **$5.4** (see below), so set the cap to **$10** to leave headroom; cutting it too close budget-stops the scan just before it reports. Narrow the work with `--instruction` to spend less.
+- **`--instruction`** steers the agents, for example `"Focus on SQL injection in POST /rest/user/login"`.
+
+> Use the Compose hostname **`http://juice-shop:3000`** (not `localhost`). The sandbox reaches Juice Shop over `strix-net`.
+
+A headless run **exits non-zero when it finds vulnerabilities**. That's by design for CI, not an error.
+
+**What success looks like:** one measured quick run (November 2026, `claude-sonnet-4-6`, `STRIX_REASONING_EFFORT=medium`) finished in **~15 minutes** for **~$5.4** (≈13M tokens, nearly all cached) and reported **6 vulnerabilities — 1 critical, 5 medium**:
+
+- **Critical — SQL injection auth bypass** on `POST /rest/user/login`: `{"email":"' OR 1=1--","password":"x"}` logs in as admin.
+- **Medium** — IDOR on `/rest/basket/:id` (cross-user baskets), broken function-level authorization (any user can list all accounts via `GET /api/Users`), unauthenticated `GET /rest/admin/application-configuration`, password change without the current password on `/rest/user/change-password`, and DOM-based XSS in the search query parameter.
+
+Each finding carries a validated PoC and reproduction steps. Your run will vary — Strix is non-deterministic.
+
+### Watch it in the dashboard
+
+In a second terminal (while a scan runs, or afterwards):
+
+```bash
+docker compose --profile strix run --rm --service-ports strix view --host 0.0.0.0 --port 8789 --no-open
+```
+
+It prints a link with an access token in it. Open that link with **`localhost`** in place of `0.0.0.0` (in a Codespace, use the forwarded **8789** URL and keep the token part). The dashboard shows findings with severity and reproduction steps, plus a live graph of the agent team. The port is published on **127.0.0.1 only**, because the tokened link grants access to the run. Press **Ctrl+C** to stop it. `strix view <run-name>` opens an older run.
+
+### Cost
+
+Strix calls the Anthropic API on the same `ANTHROPIC_API_KEY` as the other AI tools (Compose passes it in as `LLM_API_KEY`). It's multi-agent and autonomous, so give it headroom like Shannon (see [Before you start: cost & API credit](#before-you-start-cost--api-credit)) and keep `--max-budget-usd` on.
+
+> **Model & cost.** `.env` ships **`STRIX_LLM=anthropic/claude-sonnet-4-6`** and **`STRIX_REASONING_EFFORT=medium`** to keep the workshop cheap (upstream's default effort is `high`). To change the model, set `STRIX_LLM` in `.env` to another LiteLLM model id such as `anthropic/claude-opus-4-6`; that costs more. Telemetry to Strix is off by default (`STRIX_TELEMETRY=0`).
+
+### Output
+
+Each run writes to **`out/strix/<run-name>/`** on the host (mounted at `/work/strix_runs`). That folder holds `findings.sarif` (the validated vulnerabilities, SARIF 2.1.0), `coverage.json` (what was tested and the gaps), `run.json` (the run record with token/cost usage) and `strix.log`. In headless mode the prose penetration-test report prints to the terminal at the end; re-open any run — with its findings and agent graph — in the [dashboard](#watch-it-in-the-dashboard) with `strix view <run-name>`. On Linux/Codespaces the files are owned by root, because the container runs as root to use the Docker socket. Use `sudo` to delete them.
+
+### Stop / clean up Strix
+
+Scans are one-shot (`run --rm`), so there's no long-running service to stop. Press **Ctrl+C** to abort a scan. If a sandbox container is left behind, remove it with:
+
+```bash
+docker ps -a --filter label=strix-run-id                   # list leftover sandboxes
+docker rm -f $(docker ps -aq --filter label=strix-run-id)  # remove them
+```
+
+To reclaim the disk, run `docker rmi ghcr.io/usestrix/strix-sandbox:1.3.0 workshop-bundle-strix`.
+
+### Running Strix in a Codespace
+
+It works the same way. The devcontainer's Docker-in-Docker daemon provides `/var/run/docker.sock`. Caveats:
+
+- **Disk.** The sandbox image is ≈5.8 GB. On a 4-core (32 GB) Codespace that also has the ARTEX image, check `df -h /workspaces && docker system df` before pulling, and remove images you're done with.
+- **Resources.** Don't run a Strix scan and a Shannon scan at the same time on a 4-core/16 GB machine.
+- **Dashboard.** Forward port **8789** (it shows up in the **Ports** tab once the `view` command runs) and keep it **Private**.
+
+> **Reproducible installs.** `dockerfiles/strix.Dockerfile` pins `STRIX_VERSION`, and `docker-compose.yml` pins the matching sandbox tag in `STRIX_IMAGE`. Bump both together.
+
+---
+
 ## Where reports are saved
 
 All host paths are relative to `workshop-bundle/`. Anything under `workspace/` or `out/` is bind-mounted, so it persists after a run.
@@ -459,6 +551,7 @@ All host paths are relative to `workshop-bundle/`. Anything under `workspace/` o
 | **Shannon** | Audit logs and session data | `out/shannon/` |
 | **PentestGPT** | Generated walkthrough (Markdown) | `workspace/workspace/juice-shop-walkthrough.md` |
 | **ARTEX** (optional) | Findings, sessions, and reports | `out/artex/` |
+| **Strix** (optional) | Validated findings (SARIF), coverage, run record, log | `out/strix/<run-name>/` |
 
 **Not saved to the host.** PentestGPT's `/tmp/FINAL_REPORT.md` and `~/.pentestgpt/sessions` live *inside* the container and are lost when it's recreated. Copy the report out if you want to keep it (command above).
 
@@ -551,6 +644,10 @@ docker compose run --rm shannon-worker node apps/worker/dist/temporal/worker.js 
 # PentestGPT session (--no-telemetry turns off data sent to Langfuse)
 docker compose exec -it pentestgpt bash
 pentestgpt --target juice-shop:3000 --no-telemetry
+
+# Strix quick black-box scan, capped at $10 (optional; exits non-zero when it finds issues)
+docker compose --profile strix run --rm strix -n -t http://juice-shop:3000 --scan-mode quick --max-budget-usd 10
+docker compose --profile strix run --rm --service-ports strix view --host 0.0.0.0 --port 8789 --no-open
 
 # Reset Shannon's workspace between runs
 ./reset-workspace.sh
